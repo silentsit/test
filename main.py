@@ -9,7 +9,7 @@ import uvicorn
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple, Optional
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from functools import wraps
 from pytz import timezone
 import traceback
@@ -214,14 +214,14 @@ class AlertData(BaseModel):
     percentage: Optional[float] = None  # For partial closes
     position_update: Optional[Dict[str, Any]] = None  # For updates
     
-    @validator('symbol')
+    @field_validator('symbol')
     def validate_symbol(cls, v):
         """Validate symbol format"""
         if not v or len(v) < 3:
             raise ValueError("Symbol must be at least 3 characters")
         return v
     
-    @validator('action')
+    @field_validator('action')
     def validate_action(cls, v):
         """Validate action"""
         valid_actions = ['BUY', 'SELL', 'CLOSE', 'UPDATE']
@@ -229,7 +229,7 @@ class AlertData(BaseModel):
             raise ValueError(f"Action must be one of {valid_actions}")
         return v
     
-    @validator('percentage')
+    @field_validator('percentage')
     def validate_percentage(cls, v):
         """Validate percentage for partial closes"""
         if v is not None and (v <= 0 or v >= 100):
