@@ -163,7 +163,7 @@ def handle_async_errors(func):
 class Settings:
     """Configuration settings for the trading bot"""
     
-    def __init__(self):
+def __init__(self):
     # API settings
     self.oanda_api_url = os.getenv("OANDA_API_URL", "https://api-fxpractice.oanda.com")
     # Remove trailing /v3 if present to avoid duplication
