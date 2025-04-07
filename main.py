@@ -134,6 +134,19 @@ def handle_errors(func):
             raise
     return wrapper
 
+# Error handling decorators
+def handle_errors(func):
+    """Decorator for handling synchronous function errors"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in {func.__name__}: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    return wrapper
+
 def handle_async_errors(func):
     """Decorator for handling asynchronous function errors"""
     @wraps(func)
@@ -151,21 +164,22 @@ class Settings:
     """Configuration settings for the trading bot"""
     
     def __init__(self):
-        # API settings
-        self.oanda_api_url = os.getenv("OANDA_API_URL", "https://api-fxpractice.oanda.com")
-        if self.oanda_api_url.endswith('/v3'):
-            self.oanda_api_url = self.oanda_api_url[:-3]  # Remove trailing /v3
-        self.oanda_account = os.getenv("OANDA_ACCOUNT", "")
-        self.oanda_api_key = os.getenv("OANDA_API_KEY", "")
-        
-        # Timeouts
-        self.session_timeout = int(os.getenv("SESSION_TIMEOUT", "30"))
-        self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
-        
-        # Trading limits
-        self.max_positions = int(os.getenv("MAX_POSITIONS", "10"))
-        self.max_correlation = float(os.getenv("MAX_CORRELATION", "0.8"))
-        self.max_daily_trades = int(os.getenv("MAX_DAILY_TRADES", "100"))
+    # API settings
+    self.oanda_api_url = os.getenv("OANDA_API_URL", "https://api-fxpractice.oanda.com")
+    # Remove trailing /v3 if present to avoid duplication
+    if self.oanda_api_url.endswith('/v3'):
+        self.oanda_api_url = self.oanda_api_url[:-3]  # Remove trailing /v3
+    self.oanda_account = os.getenv("OANDA_ACCOUNT", "")
+    self.oanda_api_key = os.getenv("OANDA_API_KEY", "")
+    
+    # Timeouts
+    self.session_timeout = int(os.getenv("SESSION_TIMEOUT", "30"))
+    self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
+    
+    # Trading limits
+    self.max_positions = int(os.getenv("MAX_POSITIONS", "10"))
+    self.max_correlation = float(os.getenv("MAX_CORRELATION", "0.8"))
+    self.max_daily_trades = int(os.getenv("MAX_DAILY_TRADES", "100"))
 
 config = Settings()
 
@@ -264,6 +278,13 @@ async def get_session() -> aiohttp.ClientSession:
             # Update timestamp
             session_data["timestamp"] = time.time()
             return session_data["session"]
+        else:
+            # Close old session before creating a new one
+            try:
+                await _session_store[task_id]["session"].close()
+            except:
+                pass
+            del _session_store[task_id]
     
     # Create new session
     session = aiohttp.ClientSession(
@@ -306,6 +327,38 @@ async def cleanup_stale_sessions():
     if stale_tasks:
         await asyncio.gather(*stale_tasks, return_exceptions=True)
         logger.info(f"Cleaned up {len(stale_tasks)} stale sessions")
+
+async def cleanup_sessions():
+    """Periodically clean up stale sessions"""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Run every minute
+            await cleanup_stale_sessions()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in session cleanup: {str(e)}")
+            await asyncio.sleep(30)  # Short delay before retry
+
+# API implementation with lifespan
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    await position_manager.start()
+    cleanup_task = asyncio.create_task(cleanup_sessions())
+    
+    yield
+    
+    # Shutdown
+    cleanup_task.cancel()
+    await position_manager.stop()
+    await close_db_connection()
+    await close_all_sessions()
+
+app = FastAPI(title="Trading Bot API", version="1.0.0", lifespan=lifespan)
 
 # Market Analysis Classes
 class VolatilityMonitor:
@@ -479,6 +532,35 @@ class LorentzianDistanceClassifier:
         return adjustments
 
 # Position Manager
+# Forward declarations for functions used by PositionManager
+async def get_open_positions() -> Tuple[bool, Dict[str, Any]]:
+    """Forward declaration - will be implemented later"""
+    pass
+
+async def get_current_price(symbol: str, position_type: str = None) -> float:
+    """Forward declaration - will be implemented later"""
+    pass
+
+async def get_atr(symbol: str, timeframe: str) -> float:
+    """Forward declaration - will be implemented later"""
+    pass
+
+def standardize_symbol(symbol: str) -> str:
+    """Forward declaration - will be implemented later"""
+    pass
+
+async def execute_trade_close(alert: AlertData) -> Tuple[bool, Dict[str, Any]]:
+    """Forward declaration - will be implemented later"""
+    pass
+
+async def execute_trade_partial_close(alert: AlertData, percentage: float) -> Tuple[bool, Dict[str, Any]]:
+    """Forward declaration - will be implemented later"""
+    pass
+
+def get_instrument_type(symbol: str) -> str:
+    """Forward declaration - will be implemented later"""
+    pass
+    
 class PositionManager:
     """Manager for tracking and analyzing trading positions"""
     
@@ -1411,18 +1493,16 @@ app = FastAPI(title="Trading Bot API", version="1.0.0")
 # Initialize position manager
 position_manager = PositionManager()
 
-@app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup"""
     await init_db()
     await position_manager.start()
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up resources on shutdown"""
-    await position_manager.stop()
-    await close_db_connection()
-    await close_all_sessions()
+async def startup_event():
+    """Initialize resources on startup"""
+    await init_db()
+    await position_manager.start()
+    asyncio.create_task(cleanup_sessions())
 
 # Health check endpoint
 @app.get("/health", status_code=200)
@@ -1480,7 +1560,8 @@ async def close_position(symbol: str):
 async def process_alert(alert: AlertData):
     """Process incoming trading alert"""
     try:
-        logger.info(f"Received alert: {alert.dict()}")
+        # Change this line in the process_alert function
+        logger.info(f"Received alert: {alert.model_dump()}")
         
         # Check if market is open
         if not await is_market_open(alert.symbol):
