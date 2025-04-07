@@ -1723,6 +1723,354 @@ async def get_current_price(symbol: str, position_type: str = None) -> float:
         logger.error(f"Exception fetching price for {symbol}: {str(e)}")
         raise ValueError(f"Price fetch exception: {str(e)}")
 
+async def get_atr(symbol: str, timeframe: str) -> float:
+    """Get Average True Range for a symbol and timeframe"""
+    try:
+        # In a full implementation, this would call the broker API to get historical data
+        # and calculate ATR. For now, we'll use a simplified approach with defaults.
+        
+        # Default ATR values based on symbol type and timeframe
+        defaults = {
+            'FOREX': {
+                '1m': 0.0002,
+                '5m': 0.0005,
+                '15m': 0.0008,
+                '30m': 0.0012,
+                '1H': 0.0020,
+                '4H': 0.0040,
+                'D': 0.0080
+            },
+            'FOREX_JPY': {
+                '1m': 0.02,
+                '5m': 0.05,
+                '15m': 0.08,
+                '30m': 0.12,
+                '1H': 0.20,
+                '4H': 0.40,
+                'D': 0.80
+            },
+            'METAL': {
+                '1m': 0.10,
+                '5m': 0.25,
+                '15m': 0.40,
+                '30m': 0.60,
+                '1H': 1.00,
+                '4H': 2.00,
+                'D': 4.00
+            },
+            'INDEX': {
+                '1m': 1.0,
+                '5m': 2.5,
+                '15m': 4.0,
+                '30m': 6.0,
+                '1H': 10.0,
+                '4H': 20.0,
+                'D': 40.0
+            },
+            'ENERGY': {
+                '1m': 0.05,
+                '5m': 0.10,
+                '15m': 0.15,
+                '30m': 0.25,
+                '1H': 0.50,
+                '4H': 1.00,
+                'D': 2.00
+            }
+        }
+        
+        # Get instrument type
+        instrument_type = get_instrument_type(symbol)
+        
+        # Get ATR for this type and timeframe, default to FOREX 1H if not found
+        type_defaults = defaults.get(instrument_type, defaults['FOREX'])
+        atr = type_defaults.get(timeframe, type_defaults['1H'])
+        
+        return atr
+        
+    except Exception as e:
+        logger.error(f"Error getting ATR for {symbol}: {str(e)}")
+        # Return a reasonable default
+        return 0.001  # Default 10 pips for FOREX
+
+def get_instrument_type(symbol: str) -> str:
+    """Determine the type of instrument from the symbol"""
+    symbol = symbol.upper()
+    
+    # FOREX pairs
+    if '_' in symbol or '/' in symbol:
+        parts = symbol.replace('/', '_').split('_')
+        if len(parts) == 2:
+            # Check if it's a JPY pair
+            if 'JPY' in parts:
+                return 'FOREX_JPY'
+            return 'FOREX'
+    
+    # METALS
+    if symbol.startswith('XAU') or symbol.startswith('XAG') or symbol.startswith('GOLD'):
+        return 'METAL'
+        
+    # INDICES
+    indices = ['SPX', 'NAS', 'DOW', 'DAX', 'FTSE', 'NKY', 'US30', 'US500', 'USTEC']
+    if any(idx in symbol for idx in indices):
+        return 'INDEX'
+        
+    # ENERGY
+    energy = ['OIL', 'BRENT', 'WTI', 'NAT', 'GAS']
+    if any(e in symbol for e in energy):
+        return 'ENERGY'
+        
+    # Default to FOREX if unknown
+    return 'FOREX'
+
+def get_atr_multiplier(instrument_type: str, timeframe: str) -> float:
+    """Get appropriate ATR multiplier based on instrument type and timeframe"""
+    # Base multipliers - these adjust the stop-loss distance as a multiple of ATR
+    base_multipliers = {
+        'FOREX': 1.5,
+        'FOREX_JPY': 1.5,
+        'METAL': 1.2,
+        'INDEX': 1.0,
+        'ENERGY': 1.2
+    }
+    
+    # Timeframe adjustments - higher timeframes get slightly wider stops
+    timeframe_adjustments = {
+        '1m': 0.8,  # Tighter stops on lower timeframes
+        '5m': 0.9,
+        '15m': 1.0,
+        '30m': 1.1,
+        '1H': 1.2,
+        '4H': 1.3,
+        'D': 1.5    # Wider stops on daily chart
+    }
+    
+    # Get base multiplier, default to FOREX if not found
+    base = base_multipliers.get(instrument_type, base_multipliers['FOREX'])
+    
+    # Get timeframe adjustment, default to 1H if not found
+    adjustment = timeframe_adjustments.get(timeframe, timeframe_adjustments['1H'])
+    
+    return base * adjustment
+
+async def calculate_position_size(symbol: str, risk_percentage: float) -> int:
+    """Calculate position size based on risk percentage"""
+    try:
+        # Get account info
+        success, account_info = await get_account_details()
+        if not success:
+            logger.error("Failed to get account details for position sizing")
+            return 1000  # Default to 1000 units
+            
+        # Get account balance
+        account_balance = float(account_info.get('account', {}).get('balance', 0))
+        if account_balance <= 0:
+            logger.error("Invalid account balance for position sizing")
+            return 1000  # Default to 1000 units
+            
+        # Apply risk percentage
+        # Ensure risk_percentage is within limits
+        risk_percentage = min(max(risk_percentage, 0.1), MAX_RISK_PERCENTAGE)
+        
+        # Calculate risk amount
+        risk_amount = account_balance * (risk_percentage / 100.0)
+        
+        # Get symbol price
+        price = await get_current_price(symbol)
+        
+        # Get ATR for stop loss estimation
+        timeframe = '1H'  # Default to 1H if not specified
+        atr = await get_atr(symbol, timeframe)
+        instrument_type = get_instrument_type(symbol)
+        atr_multiplier = get_atr_multiplier(instrument_type, timeframe)
+        
+        # Estimate stop loss distance in price terms
+        stop_distance = atr * atr_multiplier
+        
+        # Calculate position size
+        position_value = risk_amount / (stop_distance / price)
+        
+        # Apply instrument multiplier
+        multiplier = INSTRUMENT_MULTIPLIERS.get(instrument_type, INSTRUMENT_MULTIPLIERS['FOREX'])
+        
+        # Calculate units
+        units = int(position_value * multiplier)
+        
+        # Ensure minimum size
+        min_size = 100 if instrument_type == 'FOREX' else 1
+        units = max(units, min_size)
+        
+        logger.info(f"Calculated position size for {symbol}: {units} units")
+        return units
+        
+    except Exception as e:
+        logger.error(f"Error calculating position size: {str(e)}")
+        return 1000  # Default to 1000 units
+
+@handle_async_errors
+async def execute_trade(alert: AlertData) -> Tuple[bool, Dict[str, Any]]:
+    """Execute a trade based on alert data"""
+    try:
+        logger.info(f"Executing {alert.action} for {alert.symbol}")
+        
+        # Get position size
+        risk_percentage = alert.risk_percentage or DEFAULT_RISK_PERCENTAGE
+        position_size = await calculate_position_size(alert.symbol, risk_percentage)
+        
+        # Get current price
+        price_type = "ask" if alert.action == "BUY" else "bid"
+        
+        # Prepare order data
+        order_data = {
+            "order": {
+                "instrument": standardize_symbol(alert.symbol),
+                "units": str(position_size) if alert.action == "BUY" else str(-position_size),
+                "type": "MARKET",
+                "positionFill": "DEFAULT",
+                "timeInForce": "FOK"
+            }
+        }
+        
+        # Add stop loss and take profit based on ATR if possible
+        atr = await get_atr(alert.symbol, alert.timeframe)
+        if atr > 0:
+            instrument_type = get_instrument_type(alert.symbol)
+            atr_multiplier = get_atr_multiplier(instrument_type, alert.timeframe)
+            
+            # Get current price for calculation
+            current_price = await get_current_price(alert.symbol)
+            
+            # Calculate stop loss and take profit
+            if alert.action == "BUY":
+                stop_loss = current_price - (atr * atr_multiplier)
+                take_profit = current_price + (atr * atr_multiplier)
+            else:
+                stop_loss = current_price + (atr * atr_multiplier)
+                take_profit = current_price - (atr * atr_multiplier)
+                
+            # Add to order
+            order_data["order"]["stopLossOnFill"] = {
+                "timeInForce": "GTC",
+                "price": str(round(stop_loss, 5))
+            }
+            
+            order_data["order"]["takeProfitOnFill"] = {
+                "timeInForce": "GTC",
+                "price": str(round(take_profit, 5))
+            }
+            
+        # Execute the order
+        url = f"{config.oanda_api_url}/v3/accounts/{config.oanda_account}/orders"
+        headers = {
+            "Authorization": f"Bearer {config.oanda_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        session = await get_session()
+        async with session.post(url, json=order_data, headers=headers) as response:
+            result = await response.json()
+            
+            if response.status == 201:
+                logger.info(f"Order executed successfully: {result}")
+                return True, result
+            else:
+                logger.error(f"Order execution failed: {result}")
+                return False, result
+                
+    except Exception as e:
+        logger.error(f"Error executing trade: {str(e)}")
+        return False, {"error": str(e)}
+
+@handle_async_errors
+async def execute_trade_close(alert: AlertData) -> Tuple[bool, Dict[str, Any]]:
+    """Close a trade completely"""
+    try:
+        logger.info(f"Closing position for {alert.symbol}")
+        
+        # Prepare close data
+        close_data = {
+            "longUnits": "ALL",
+            "shortUnits": "ALL"
+        }
+        
+        # Execute the close
+        url = f"{config.oanda_api_url}/v3/accounts/{config.oanda_account}/positions/{standardize_symbol(alert.symbol)}/close"
+        headers = {
+            "Authorization": f"Bearer {config.oanda_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        session = await get_session()
+        async with session.put(url, json=close_data, headers=headers) as response:
+            result = await response.json()
+            
+            if response.status in [200, 201]:
+                logger.info(f"Position closed successfully: {result}")
+                return True, result
+            else:
+                logger.error(f"Position close failed: {result}")
+                return False, result
+                
+    except Exception as e:
+        logger.error(f"Error closing trade: {str(e)}")
+        return False, {"error": str(e)}
+
+@handle_async_errors
+async def execute_trade_partial_close(alert: AlertData, percentage: float) -> Tuple[bool, Dict[str, Any]]:
+    """Close a portion of a trade"""
+    try:
+        logger.info(f"Partially closing position for {alert.symbol}: {percentage}%")
+        
+        # First, get the position to determine current units
+        url = f"{config.oanda_api_url}/v3/accounts/{config.oanda_account}/positions/{standardize_symbol(alert.symbol)}"
+        headers = {
+            "Authorization": f"Bearer {config.oanda_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        session = await get_session()
+        async with session.get(url, headers=headers) as response:
+            position_data = await response.json()
+            
+            if response.status != 200:
+                logger.error(f"Error fetching position details: {position_data}")
+                return False, {"error": "Failed to get position details"}
+                
+            # Extract units
+            long_units = float(position_data.get('position', {}).get('long', {}).get('units', 0))
+            short_units = float(position_data.get('position', {}).get('short', {}).get('units', 0))
+            
+            # Calculate units to close
+            if long_units > 0:
+                units_to_close = int(long_units * percentage / 100)
+                close_data = {
+                    "longUnits": str(units_to_close)
+                }
+            elif short_units < 0:
+                units_to_close = int(abs(short_units) * percentage / 100)
+                close_data = {
+                    "shortUnits": str(units_to_close)
+                }
+            else:
+                logger.error(f"No position found for {alert.symbol}")
+                return False, {"error": "No position found"}
+                
+        # Execute the partial close
+        close_url = f"{config.oanda_api_url}/v3/accounts/{config.oanda_account}/positions/{standardize_symbol(alert.symbol)}/close"
+        
+        async with session.put(close_url, json=close_data, headers=headers) as response:
+            result = await response.json()
+            
+            if response.status in [200, 201]:
+                logger.info(f"Position partially closed successfully: {result}")
+                return True, result
+            else:
+                logger.error(f"Position partial close failed: {result}")
+                return False, result
+                
+    except Exception as e:
+        logger.error(f"Error in partial position close: {str(e)}")
+        return False, {"error": str(e)}
+
 async def is_market_open(symbol: str) -> bool:
     """Check if market is open for the symbol"""
     # Basic check for forex
