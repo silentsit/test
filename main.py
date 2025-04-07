@@ -163,25 +163,25 @@ def handle_async_errors(func):
 class Settings:
     """Configuration settings for the trading bot"""
     
-def __init__(self):
-    # API settings
-    self.oanda_api_url = os.getenv("OANDA_API_URL", "https://api-fxpractice.oanda.com")
-    # Remove trailing /v3 if present to avoid duplication
-    if self.oanda_api_url.endswith('/v3'):
-        self.oanda_api_url = self.oanda_api_url[:-3]  # Remove trailing /v3
-    self.oanda_account = os.getenv("OANDA_ACCOUNT", "")
-    self.oanda_api_key = os.getenv("OANDA_API_KEY", "")
+    def __init__(self):
+        # API settings
+        self.oanda_api_url = os.getenv("OANDA_API_URL", "https://api-fxpractice.oanda.com")
+        # Remove trailing /v3 if present to avoid duplication
+        if self.oanda_api_url.endswith('/v3'):
+            self.oanda_api_url = self.oanda_api_url[:-3]  # Remove trailing /v3
+        self.oanda_account = os.getenv("OANDA_ACCOUNT", "")
+        self.oanda_api_key = os.getenv("OANDA_API_KEY", "")
+        
+        # Timeouts
+        self.session_timeout = int(os.getenv("SESSION_TIMEOUT", "30"))
+        self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
+        
+        # Trading limits
+        self.max_positions = int(os.getenv("MAX_POSITIONS", "10"))
+        self.max_correlation = float(os.getenv("MAX_CORRELATION", "0.8"))
+        self.max_daily_trades = int(os.getenv("MAX_DAILY_TRADES", "100"))
     
-    # Timeouts
-    self.session_timeout = int(os.getenv("SESSION_TIMEOUT", "30"))
-    self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
-    
-    # Trading limits
-    self.max_positions = int(os.getenv("MAX_POSITIONS", "10"))
-    self.max_correlation = float(os.getenv("MAX_CORRELATION", "0.8"))
-    self.max_daily_trades = int(os.getenv("MAX_DAILY_TRADES", "100"))
-
-config = Settings()
+    config = Settings()
 
 # Logging
 class JsonFormatter(logging.Formatter):
