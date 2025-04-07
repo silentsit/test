@@ -159,7 +159,7 @@ def handle_async_errors(func):
             raise
     return wrapper
 
-# Configuration
+# First, define the Settings class
 class Settings:
     """Configuration settings for the trading bot"""
     
@@ -180,8 +180,9 @@ class Settings:
         self.max_positions = int(os.getenv("MAX_POSITIONS", "10"))
         self.max_correlation = float(os.getenv("MAX_CORRELATION", "0.8"))
         self.max_daily_trades = int(os.getenv("MAX_DAILY_TRADES", "100"))
-    
-    config = Settings()
+
+# Then instantiate the Settings class
+config = Settings()
 
 # Logging
 class JsonFormatter(logging.Formatter):
