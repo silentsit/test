@@ -2097,6 +2097,8 @@ async def is_tradeable(symbol: str) -> bool:
     
     # Convert symbol format if needed
     instrument = symbol.replace('_', '_')
+
+
     
     # List of untradeable instruments
     untradeable = [
