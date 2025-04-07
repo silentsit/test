@@ -153,6 +153,8 @@ class Settings:
     def __init__(self):
         # API settings
         self.oanda_api_url = os.getenv("OANDA_API_URL", "https://api-fxpractice.oanda.com")
+        if self.oanda_api_url.endswith('/v3'):
+            self.oanda_api_url = self.oanda_api_url[:-3]  # Remove trailing /v3
         self.oanda_account = os.getenv("OANDA_ACCOUNT", "")
         self.oanda_api_key = os.getenv("OANDA_API_KEY", "")
         
