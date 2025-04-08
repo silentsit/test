@@ -1250,13 +1250,13 @@ class PositionManager:
             units_to_close = current_units * (percentage / 100.0)
             
             # Create close alert
-            close_alert = {
-                'symbol': symbol,
-                'action': 'CLOSE',
-                'timeframe': position.get('timeframe', '1H'),
-                'account': config.oanda_account,
-                'percentage': percentage
-            }
+            close_alert = AlertData(
+                symbol=symbol,
+                action='CLOSE',
+                timeframe=position.get('timeframe', '1H'),
+                account=config.oanda_account,
+                percentage=percentage
+            )
             
             logger.info(f"Closing {percentage}% of position for {symbol} - Reason: {reason}")
             
