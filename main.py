@@ -1053,83 +1053,92 @@ class PositionManager:
                 logger.info(f"Updated trailing stop for {symbol} to {new_stop}")
 
     @handle_async_errors
-    async def add_position(self, symbol: str, position_type: str, entry_price: float, 
-                         units: float, timeframe: str, account_balance: float = 0.0,
-                         stop_loss: float = None, take_profits: List[float] = None):
-        """Add a new position with comprehensive tracking"""
-        async with self._lock:
-            current_time = datetime.now(timezone('Asia/Bangkok'))
+async def add_position(self, symbol: str, position_type: str, entry_price: float, 
+                     units: float, timeframe: str, account_balance: float = 0.0,
+                     stop_loss: float = None, take_profits: List[float] = None,
+                     order_result: Dict[str, Any] = None):
+    """Add a new position with comprehensive tracking"""
+    
+    # Check if the order was actually filled by examining the order_result
+    if order_result and 'orderCancelTransaction' in order_result:
+        cancel_reason = order_result.get('orderCancelTransaction', {}).get('reason')
+        if cancel_reason:
+            logger.warning(f"Not adding position for {symbol} - order was canceled: {cancel_reason}")
+            return False
+    
+    async with self._lock:
+        current_time = datetime.now(timezone('Asia/Bangkok'))
+        
+        # Calculate default stop loss and take profits if not provided
+        if stop_loss is None or take_profits is None:
+            atr = await get_atr(symbol, timeframe)
+            instrument_type = get_instrument_type(symbol)
+            atr_multiplier = get_atr_multiplier(instrument_type, timeframe)
             
-            # Calculate default stop loss and take profits if not provided
-            if stop_loss is None or take_profits is None:
-                atr = await get_atr(symbol, timeframe)
-                instrument_type = get_instrument_type(symbol)
-                atr_multiplier = get_atr_multiplier(instrument_type, timeframe)
-                
-                if stop_loss is None:
-                    if position_type == 'LONG':
-                        stop_loss = entry_price - (atr * atr_multiplier)
-                    else:
-                        stop_loss = entry_price + (atr * atr_multiplier)
-                
-                if take_profits is None:
-                    if position_type == 'LONG':
-                        take_profits = [
-                            entry_price + (atr * atr_multiplier),  # 1:1
-                            entry_price + (atr * atr_multiplier * 2),  # 2:1
-                            entry_price + (atr * atr_multiplier * 3)  # 3:1
-                        ]
-                    else:
-                        take_profits = [
-                            entry_price - (atr * atr_multiplier),  # 1:1
-                            entry_price - (atr * atr_multiplier * 2),  # 2:1
-                            entry_price - (atr * atr_multiplier * 3)  # 3:1
-                        ]
+            if stop_loss is None:
+                if position_type == 'LONG':
+                    stop_loss = entry_price - (atr * atr_multiplier)
+                else:
+                    stop_loss = entry_price + (atr * atr_multiplier)
             
-            # Create position data
-            position_data = {
-                'entry_time': current_time,
-                'entry_price': entry_price,
-                'position_type': position_type,
-                'units': units,
-                'current_units': units,
-                'timeframe': timeframe,
-                'last_update': current_time,
-                'bars_held': 0,
-                'unrealized_pnl': 0.0,
-                'current_price': entry_price
-            }
+            if take_profits is None:
+                if position_type == 'LONG':
+                    take_profits = [
+                        entry_price + (atr * atr_multiplier),  # 1:1
+                        entry_price + (atr * atr_multiplier * 2),  # 2:1
+                        entry_price + (atr * atr_multiplier * 3)  # 3:1
+                    ]
+                else:
+                    take_profits = [
+                        entry_price - (atr * atr_multiplier),  # 1:1
+                        entry_price - (atr * atr_multiplier * 2),  # 2:1
+                        entry_price - (atr * atr_multiplier * 3)  # 3:1
+                    ]
+        
+        # Create position data
+        position_data = {
+            'entry_time': current_time,
+            'entry_price': entry_price,
+            'position_type': position_type,
+            'units': units,
+            'current_units': units,
+            'timeframe': timeframe,
+            'last_update': current_time,
+            'bars_held': 0,
+            'unrealized_pnl': 0.0,
+            'current_price': entry_price
+        }
+        
+        # Create risk data
+        risk_data = {
+            'stop_loss': stop_loss,
+            'take_profits': take_profits,
+            'trailing_stop': None,
+            'risk_reward_ratio': 0.0,
+            'time_in_position': 0,
+            'var_95': 0.0,
+            'es_95': 0.0,
+            'stop_adjusted_for_time': False
+        }
+        
+        # Save data
+        self._positions[symbol] = position_data
+        self._position_risk_data[symbol] = risk_data
+        self._bar_times.setdefault(symbol, []).append(current_time)
+        
+        # Update portfolio heat
+        if account_balance > 0:
+            self._portfolio_heat += (units * entry_price) / account_balance
             
-            # Create risk data
-            risk_data = {
-                'stop_loss': stop_loss,
-                'take_profits': take_profits,
-                'trailing_stop': None,
-                'risk_reward_ratio': 0.0,
-                'time_in_position': 0,
-                'var_95': 0.0,
-                'es_95': 0.0,
-                'stop_adjusted_for_time': False
-            }
-            
-            # Save data
-            self._positions[symbol] = position_data
-            self._position_risk_data[symbol] = risk_data
-            self._bar_times.setdefault(symbol, []).append(current_time)
-            
-            # Update portfolio heat
-            if account_balance > 0:
-                self._portfolio_heat += (units * entry_price) / account_balance
-                
-                # Also update peak balance if needed
-                if account_balance > self._peak_balance:
-                    self._peak_balance = account_balance
-                self._current_balance = account_balance
-            
-            logger.info(f"Added position for {symbol}: {position_data}")
-            logger.info(f"Risk parameters for {symbol}: Stop: {stop_loss}, TPs: {take_profits}")
-            
-            return True
+            # Also update peak balance if needed
+            if account_balance > self._peak_balance:
+                self._peak_balance = account_balance
+            self._current_balance = account_balance
+        
+        logger.info(f"Added position for {symbol}: {position_data}")
+        logger.info(f"Risk parameters for {symbol}: Stop: {stop_loss}, TPs: {take_profits}")
+        
+        return True
             
     @handle_async_errors
     async def update_position(self, symbol: str, updates: Dict[str, Any]):
